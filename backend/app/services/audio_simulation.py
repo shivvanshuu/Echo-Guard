@@ -39,14 +39,39 @@ MIN_WINDOW_RMS = 0.002             # near-silence is skipped (the classifier res
 EVENT_WINDOWS_PER_NODE = 3         # strongest moments of the clip each node listens to
 ALERT_THRESHOLD = 0.50             # a node raises an alert at or above this confidence
 
-# --- Propagation model (assumptions) -----------------------------------------
-REFERENCE_DISTANCE_M = 100.0       # at this distance the clip is heard at REFERENCE_SNR_DB
-REFERENCE_SNR_DB = 35.0            # signal-to-noise ratio at the reference distance ("normal" loudness)
-FOREST_ABSORPTION_DB_PER_KM = 6.0  # extra loss from trees and air beyond the reference
+# --- Propagation model & Class-Based Decibel Baselines (assumptions) ---------
+REFERENCE_DISTANCE_M = 1.0         # 1 meter reference distance
+FOREST_ABSORPTION_DB_PER_KM = 6.0  # extra loss from trees and air per kilometre beyond 1m
 NOISE_RMS = 0.01                   # background noise level at every node (about -40 dBFS)
 MIN_DETECTION_SNR_DB = 0.0         # a node cannot pick out a sound quieter than its background noise
 MAX_SNR_DB = 60.0
 LOUDNESS_OFFSET_DB = {"quiet": -10.0, "normal": 0.0, "loud": 10.0}
+
+# Hardcoded real-world baseline source levels (Source Level SPL in dB at 1 meter reference distance)
+SOURCE_LEVEL_SPL_DB: Dict[str, float] = {
+    "GUNSHOT": 150.0,         # Impulsive high-caliber ballistic impulse (~150 dB SPL @ 1m)
+    "BLAST_FISHING": 145.0,    # Explosive detonation shockwave (~145 dB SPL @ 1m)
+    "CHAINSAW": 110.0,        # Two-stroke gas logging chainsaw at full throttle (~110 dB SPL @ 1m)
+    "ILLEGAL_VESSEL": 105.0,   # High-speed marine outboard vessel engine (~105 dB SPL @ 1m)
+    "VEHICLE_ENGINE": 100.0,   # Heavy diesel logging vehicle / road transport truck (~100 dB SPL @ 1m)
+}
+DEFAULT_SOURCE_LEVEL_SPL_DB = 110.0  # Default baseline source level SPL (~110 dB @ 1m)
+AMBIENT_NOISE_FLOOR_SPL_DB = 40.0    # Ambient tropical forest background noise floor (~40 dB SPL, -40 dBFS)
+
+IMPULSIVE_THREATS = {
+    "GUNSHOT",
+    "BLAST_FISHING",
+    "GUNSHOT, GUNFIRE",
+    "EXPLOSION",
+    "CAP GUN",
+    "FIRECRACKER",
+    "FIREWORKS",
+    "ARTILLERY FIRE",
+    "MACHINE GUN",
+    "FUSILLADE",
+    "BOOM",
+    "BURST, POP",
+}
 
 SUPPORTED_EXTENSIONS = (
     ".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".mp4", ".webm", ".mov", ".mkv",
@@ -143,12 +168,14 @@ def window_ranges(n_samples: int) -> List[Tuple[int, int]]:
     return [(start, start + size) for start in range(0, n_samples - size + 1, hop)]
 
 
+YAMNET_FRAME_SAMPLES = 15360  # 0.96 seconds at 16 kHz minimum YAMNet frame
+
+
 def pad_to_minimum(window: np.ndarray) -> np.ndarray:
-    """YAMNet needs about one second of audio."""
-    minimum = TARGET_SR
-    if window.size >= minimum:
+    """Ensure audio window has at least 0.96s (15,360 samples) for YAMNet."""
+    if window.size >= YAMNET_FRAME_SAMPLES:
         return window
-    return np.pad(window, (0, minimum - window.size))
+    return np.pad(window, (0, YAMNET_FRAME_SAMPLES - window.size), mode="constant", constant_values=0.0)
 
 
 def envelope(waveform: np.ndarray, points: int = 240) -> List[float]:
@@ -174,39 +201,96 @@ def pink_noise(n_samples: int, rng: np.random.Generator) -> np.ndarray:
     return (noise / std).astype(np.float32)
 
 
-def received_snr_db(distance_m: float, loudness: str) -> float:
-    """
-    Signal-to-noise ratio at a node.
+def is_impulsive_threat(threat_type: Optional[str]) -> bool:
+    """Return True if threat class is an impulsive acoustic event (e.g. gunshots, explosions)."""
+    if not threat_type:
+        return False
+    return threat_type.strip().upper() in IMPULSIVE_THREATS
 
-    Sound level falls about 6 dB each time the distance doubles (spherical spreading).
-    On top of that, forest and air absorb a little more with every kilometre.
+
+def get_source_level_spl(threat_type: Optional[str] = None) -> float:
+    """Return hardcoded real-world baseline source level (Source Level SPL in dB at 1 meter)."""
+    if not threat_type:
+        return DEFAULT_SOURCE_LEVEL_SPL_DB
+    normalized = threat_type.strip().upper()
+    if normalized in SOURCE_LEVEL_SPL_DB:
+        return SOURCE_LEVEL_SPL_DB[normalized]
+    if is_impulsive_threat(normalized):
+        return SOURCE_LEVEL_SPL_DB["GUNSHOT"]
+    return DEFAULT_SOURCE_LEVEL_SPL_DB
+
+
+def calculate_source_intensity(waveform: np.ndarray, threat_type: Optional[str] = None) -> float:
     """
-    distance = max(distance_m, 1.0)
-    spreading = 20.0 * math.log10(distance / REFERENCE_DISTANCE_M)
-    absorption = FOREST_ABSORPTION_DB_PER_KM * max(0.0, distance - REFERENCE_DISTANCE_M) / 1000.0
-    snr = REFERENCE_SNR_DB + LOUDNESS_OFFSET_DB[loudness] - spreading - absorption
+    Calculate the source audio intensity (initial loudness).
+
+    Peak vs. RMS Power:
+    If the detected threat is an impulsive class (like gunshot), calculate its initial loudness
+    using peak amplitude (max energy) rather than the average RMS power of the entire clip,
+    preventing impulsive energy from being diluted across long silence windows.
+    For continuous threats (chainsaws, vehicles), average RMS power is used.
+    """
+    if waveform.size == 0:
+        return 0.0
+    if is_impulsive_threat(threat_type):
+        peak_val = float(np.max(np.abs(waveform)))
+        return max(peak_val, 1e-6)
+    return rms(waveform)
+
+
+def received_snr_db(
+    distance_m: float,
+    loudness: str = "normal",
+    threat_type: Optional[str] = None,
+) -> float:
+    """
+    Signal-to-noise ratio at a node in dB.
+
+    Calculates realistic distance drop-off starting from class-based decibel baselines:
+      - Geometric spherical spreading loss: -6 dB per doubling of distance (20 * log10(d / 1.0))
+      - Atmospheric and forest foliage absorption: extra loss per kilometre
+      - Class-based source level baseline: ~150 dB for gunshots, ~110 dB for chainsaws, etc.
+    """
+    if loudness not in LOUDNESS_OFFSET_DB:
+        loudness = "normal"
+    distance = max(float(distance_m), 1.0)
+    source_spl = get_source_level_spl(threat_type) + LOUDNESS_OFFSET_DB[loudness]
+
+    # Spherical spreading loss (-6 dB per doubling of distance from 1m reference)
+    spreading = 20.0 * math.log10(distance)
+
+    # Excess forest foliage and air absorption
+    absorption = FOREST_ABSORPTION_DB_PER_KM * max(0.0, distance - 1.0) / 1000.0
+
+    received_spl = source_spl - spreading - absorption
+    snr = received_spl - AMBIENT_NOISE_FLOOR_SPL_DB
     return float(min(MAX_SNR_DB, snr))
 
 
-def detection_radius_m(loudness: str) -> float:
+def detection_radius_m(loudness: str = "normal", threat_type: Optional[str] = None) -> float:
     """Distance at which a node's signal-to-noise ratio falls to the minimum needed to detect."""
     low, high = 1.0, 200000.0
     for _ in range(60):
         middle = (low + high) / 2.0
-        if received_snr_db(middle, loudness) > MIN_DETECTION_SNR_DB:
+        if received_snr_db(middle, loudness, threat_type=threat_type) > MIN_DETECTION_SNR_DB:
             low = middle
         else:
             high = middle
     return round(low, 1)
 
 
-def mix_at_node(window: np.ndarray, snr_db: float, rng: np.random.Generator) -> np.ndarray:
+def mix_at_node(
+    window: np.ndarray,
+    snr_db: float,
+    rng: np.random.Generator,
+    threat_type: Optional[str] = None,
+) -> np.ndarray:
     """What a node hears: the clip scaled to the right SNR plus background noise."""
     noise = pink_noise(window.size, rng) * NOISE_RMS
-    signal_rms = rms(window)
-    if signal_rms < 1e-9:
+    signal_intensity = calculate_source_intensity(window, threat_type)
+    if signal_intensity < 1e-9:
         return noise
-    scale = NOISE_RMS * (10.0 ** (snr_db / 20.0)) / signal_rms
+    scale = NOISE_RMS * (10.0 ** (snr_db / 20.0)) / signal_intensity
     return (window * scale + noise).astype(np.float32)
 
 
@@ -272,11 +356,10 @@ def _listen_at_node(
     best: Optional[Dict[str, Any]] = None
     for index in event_indices:
         start, end = ranges[index]
-        heard = mix_at_node(waveform[start:end], snr_db, rng)
-        result = classifier.predict(pad_to_minimum(heard))
-
         window_base_threat = windows[index].get("threat_type")
         target_threat = base_threat if base_threat not in ("UNKNOWN", "NONE", "SILENCE", None) else window_base_threat
+        heard = mix_at_node(waveform[start:end], snr_db, rng, threat_type=target_threat)
+        result = classifier.predict(pad_to_minimum(heard))
 
         if target_threat not in ("UNKNOWN", "NONE", "SILENCE", None):
             cat_scores = result.get("category_scores", {})
@@ -344,11 +427,20 @@ def simulate_audio_drop(
         "at_s": peak["start_s"] if peak else None,
     }
 
+    detected_threat = source_verdict["threat_type"]
+    source_intensity = calculate_source_intensity(waveform, detected_threat)
+    source_spl = get_source_level_spl(detected_threat)
+    source_verdict.update({
+        "source_level_spl_db": source_spl,
+        "initial_intensity": round(source_intensity, 4),
+        "is_impulsive": is_impulsive_threat(detected_threat),
+    })
+
     node_results: List[Dict[str, Any]] = []
     alert_payloads: List[Dict[str, Any]] = []
     for node in nodes:
         distance = haversine_distance_meters(source_lat, source_lon, node["lat"], node["lon"])
-        snr = received_snr_db(distance, loudness)
+        snr = received_snr_db(distance, loudness, threat_type=detected_threat)
         entry: Dict[str, Any] = {
             "id": node["id"],
             "name": node.get("name"),
@@ -357,8 +449,11 @@ def simulate_audio_drop(
             "distance_m": round(distance, 1),
             "snr_db": round(snr, 1),
         }
-        if snr < MIN_DETECTION_SNR_DB or not event_indices:
+        if snr <= MIN_DETECTION_SNR_DB:
             entry.update(status="too_faint", threat_type=None, confidence=0.0, heard=False, at_s=None)
+        elif not event_indices:
+            # Calculated SNR is strictly positive (> 0 dB) but no threat detected in the audio clip
+            entry.update(status="heard_no_threat", threat_type=None, confidence=0.0, heard=False, at_s=None)
         else:
             listened = _listen_at_node(
                 classifier, waveform, windows, event_indices, snr,
@@ -368,10 +463,10 @@ def simulate_audio_drop(
             heard = listened["threat_type"] not in ("UNKNOWN", "NONE", "SILENCE", None) and listened["confidence"] >= ALERT_THRESHOLD
             entry.update(
                 status="detected" if heard else "heard_no_threat",
-                threat_type=listened["threat_type"],
-                confidence=round(float(listened["confidence"]), 4),
+                threat_type=listened["threat_type"] if heard else None,
+                confidence=round(float(listened["confidence"]), 4) if heard else 0.0,
                 heard=heard,
-                at_s=listened["at_s"],
+                at_s=listened["at_s"] if heard else None,
             )
             if heard:
                 alert_payloads.append({
@@ -403,10 +498,13 @@ def simulate_audio_drop(
         "strongest_node": strongest["id"] if strongest else None,
         "alert_threshold": ALERT_THRESHOLD,
         "assumptions": {
+            "source_level_spl_db": source_spl,
+            "ambient_noise_floor_spl_db": AMBIENT_NOISE_FLOOR_SPL_DB,
             "reference_distance_m": REFERENCE_DISTANCE_M,
-            "reference_snr_db": REFERENCE_SNR_DB + LOUDNESS_OFFSET_DB[loudness],
+            "reference_snr_db": source_spl + LOUDNESS_OFFSET_DB[loudness] - AMBIENT_NOISE_FLOOR_SPL_DB,
             "forest_absorption_db_per_km": FOREST_ABSORPTION_DB_PER_KM,
             "minimum_snr_db_to_detect": MIN_DETECTION_SNR_DB,
+            "is_impulsive": is_impulsive_threat(detected_threat),
             "note": "Classification is real. Distance, loudness and noise are simulated assumptions.",
         },
     }

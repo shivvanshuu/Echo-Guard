@@ -1,18 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { useTelemetry } from '../context/TelemetryContext';
 import { Volume2, VolumeX } from 'lucide-react';
 import DemoMenu from './DemoMenu';
 
 export default function Header({ title, description, onOpenDispatch }) {
   const { wsConnected, audioEnabled, setAudioEnabled } = useTelemetry();
-  const [currentTime, setCurrentTime] = useState(new Date().toUTCString().slice(17, 25));
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date().toUTCString().slice(17, 25));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   return (
     <header className="app-header">
@@ -26,8 +18,6 @@ export default function Header({ title, description, onOpenDispatch }) {
           <span className={`status-indicator ${wsConnected ? 'online' : 'offline'}`} aria-hidden="true" />
           <span>{wsConnected ? 'Live' : 'Reconnecting'}</span>
         </div>
-
-        <div className="status-pill is-clock">{currentTime} UTC</div>
 
         <button
           type="button"

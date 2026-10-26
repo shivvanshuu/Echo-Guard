@@ -27,6 +27,7 @@ from app.services.audio_simulation import (
     AudioDecodeError,
     decode_audio,
     detection_radius_m,
+    get_source_level_spl,
     simulate_audio_drop,
 )
 
@@ -58,11 +59,13 @@ async def _read_limited(upload: UploadFile) -> bytes:
 
 
 @router.get("/coverage")
-async def get_listening_range():
+async def get_listening_range(threat_type: Optional[str] = None):
     """How far a node can pick out a sound, for each loudness. Used to draw the ranges on the forest."""
     return {
-        "detection_radius_m": {name: detection_radius_m(name) for name in LOUDNESS_OFFSET_DB},
+        "detection_radius_m": {name: detection_radius_m(name, threat_type=threat_type) for name in LOUDNESS_OFFSET_DB},
         "minimum_snr_db": MIN_DETECTION_SNR_DB,
+        "threat_type": threat_type or "CHAINSAW",
+        "source_level_spl_db": get_source_level_spl(threat_type),
         "note": "Simulated assumptions, not a measured field range.",
     }
 

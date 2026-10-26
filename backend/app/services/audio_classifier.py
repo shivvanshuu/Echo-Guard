@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # Constants
 YAMNET_MODEL_URL = "https://tfhub.dev/google/yamnet/1"
 TARGET_SR = 16000  # YAMNet strictly requires 16 kHz
+YAMNET_FRAME_SAMPLES = 15360  # 0.96s minimum frame size for YAMNet (0.96 * 16000)
 
 # Domain threat mapping from YAMNet AudioSet classes
 # Explosive/firearm classes are grouped so their probabilities are summed collectively for gunshot detection
@@ -393,9 +394,16 @@ class YAMNetClassifier:
         if waveform.ndim > 1:
             waveform = np.mean(waveform, axis=1)
 
-        # Pad to at least 1.0 second (16000 samples) if too short for YAMNet
-        if len(waveform) < TARGET_SR:
-            waveform = np.pad(waveform, (0, TARGET_SR - len(waveform)))
+        # Short Audio Padding: Before passing the 16 kHz waveform to YAMNet, check its length.
+        # If it is shorter than 0.96 seconds (15,360 samples), pad the array with zeros (silence)
+        # to reach the minimum frame size so impulsive sounds are processed instead of returning 0%.
+        if len(waveform) < YAMNET_FRAME_SAMPLES:
+            waveform = np.pad(
+                waveform,
+                (0, YAMNET_FRAME_SAMPLES - len(waveform)),
+                mode="constant",
+                constant_values=0.0,
+            )
 
         # Normalize to [-1.0, 1.0]
         max_val = np.max(np.abs(waveform))
@@ -472,10 +480,11 @@ class YAMNetClassifier:
             if idx < len(peak_scores_per_class) and class_name in THREAT_CLASS_MAPPING:
                 class_probs[class_name] = round(float(peak_scores_per_class[idx]), 4)
 
-        # 1. Global Top-Class Check:
+        # Strict Nature Override:
         # Before processing threat labels, find the absolute highest score across all 521 YAMNet classes.
-        # If the top predicted class belongs to nature or silence (e.g., 'Bird', 'Animal', 'Wind', 'Rain', 'Silence'),
-        # immediately discard the detection and return none.
+        # In multi-frame audio, inspect the active sound by filtering out leading/trailing silent frames (Silence >= 0.80).
+        # If the absolute highest predicted YAMNet class is a nature/background sound (e.g., Bird, Wind, Rain, Silence),
+        # immediately force the output to unclassified with 0.0 confidence. Ignore any minor trace scores for vehicles or chainsaws.
         silence_idx = self._class_names.index("Silence") if "Silence" in self._class_names else -1
         if silence_idx >= 0 and scores_np.shape[0] > 1:
             non_silent_mask = scores_np[:, silence_idx] < 0.80
@@ -484,11 +493,15 @@ class YAMNetClassifier:
             active_scores = scores_np
 
         active_peaks = np.max(active_scores, axis=0) if len(active_scores) > 0 else peak_scores_per_class
-        global_top_idx = int(np.argmax(active_peaks)) if len(active_peaks) > 0 else 0
-        global_top_class = self._class_names[global_top_idx] if global_top_idx < len(self._class_names) else ""
-        global_top_score = float(active_peaks[global_top_idx]) if len(active_peaks) > 0 else 0.0
+        abs_top_idx = int(np.argmax(active_peaks)) if len(active_peaks) > 0 else 0
+        abs_top_class = self._class_names[abs_top_idx] if abs_top_idx < len(self._class_names) else ""
+        abs_top_score = float(active_peaks[abs_top_idx]) if len(active_peaks) > 0 else 0.0
 
-        is_nature_discard = is_nature_or_silence(global_top_class)
+        active_means = np.mean(active_scores, axis=0) if len(active_scores) > 0 else active_peaks
+        mean_top_idx = int(np.argmax(active_means)) if len(active_means) > 0 else 0
+        mean_top_class = self._class_names[mean_top_idx] if mean_top_idx < len(self._class_names) else ""
+
+        is_nature_discard = is_nature_or_silence(abs_top_class) or is_nature_or_silence(mean_top_class)
 
         # Disambiguate overlapping vehicle and marine vessel labels.
         # In AudioSet, 'Vehicle' and 'Engine' are parent classes that encompass watercraft,
@@ -516,15 +529,15 @@ class YAMNetClassifier:
             if matched_threats.get("ILLEGAL_VESSEL", 0.0) > 0.0:
                 matched_threats["ILLEGAL_VESSEL"] = vessel_peak
 
-        # 2. Hard Confidence Threshold:
-        # Stop using a relative argmax among just the threat classes.
-        # Do not trigger a threat alert unless the aggregated probability for that specific threat
-        # (vehicle, gunshot, chainsaw, or vessel) strictly exceeds a 0.45 (45%) minimum threshold.
-        # If all threat scores are below this float value, default to none.
+        # 2. Hard Confidence Threshold & Strict Nature Override:
+        # If nature/silence override triggers, immediately force the output to unclassified with 0.0 confidence
+        # and ignore any minor trace scores for vehicles or chainsaws.
         if is_silence or is_nature_discard:
             threat_type = None
             confidence = 0.0
             peak_time_s = 0.0
+            matched_threats = {t: 0.0 for t in matched_threats}
+            class_probs = {c: 0.0 for c in class_probs}
         else:
             qualified_threats = {
                 t: score for t, score in matched_threats.items()

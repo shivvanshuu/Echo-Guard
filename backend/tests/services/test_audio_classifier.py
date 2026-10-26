@@ -141,3 +141,58 @@ def test_hard_confidence_threshold_safeguard():
     assert noise_result["threat_type"] is None
     assert noise_result["confidence"] == 0.0
 
+
+def test_short_audio_padding_to_minimum_frame():
+    """Verify that waveforms shorter than 0.96s (15,360 samples) are padded with zeros and processed."""
+    classifier = get_yamnet_classifier()
+    # 0.25 second impulse (4,000 samples < 15,360 samples)
+    t = np.linspace(0, 0.25, int(TARGET_SR * 0.25), endpoint=False)
+    short_waveform = (0.8 * np.sin(2 * np.pi * 900 * t)).astype(np.float32)
+    assert len(short_waveform) < 15360
+
+    result = classifier.predict(short_waveform)
+    assert "threat_type" in result
+    assert "confidence" in result
+    assert "embedding" in result
+    assert len(result["embedding"]) == 128
+    assert "spectral_analysis" in result
+
+
+def test_strict_nature_override_ignores_trace_threats():
+    """Verify that if the highest predicted class is nature/background, output is unclassified (0.0 confidence)."""
+    classifier = get_yamnet_classifier()
+    # Mock real model inference or simulate scores where Bird is top class with minor chainsaw trace
+    bird_idx = classifier._class_names.index("Bird") if "Bird" in classifier._class_names else 0
+    chainsaw_idx = classifier._class_names.index("Chainsaw") if "Chainsaw" in classifier._class_names else 1
+
+    num_classes = len(classifier._class_names)
+    synthetic_scores = np.zeros((2, num_classes), dtype=np.float32)
+    synthetic_scores[:, bird_idx] = 0.85  # Highest predicted class: Nature
+    synthetic_scores[:, chainsaw_idx] = 0.20  # Minor trace score
+
+    class MockModel:
+        def __call__(self, tensor):
+            import tensorflow as tf
+            scores_t = tf.convert_to_tensor(synthetic_scores, dtype=tf.float32)
+            embeddings_t = tf.zeros((2, 1024), dtype=tf.float32)
+            mel_t = tf.zeros((32, 64), dtype=tf.float32)
+            return scores_t, embeddings_t, mel_t
+
+    orig_model = classifier._model
+    orig_loaded = classifier._is_loaded
+    try:
+        classifier._model = MockModel()
+        classifier._is_loaded = True
+
+        waveform = np.ones(TARGET_SR, dtype=np.float32) * 0.1
+        result = classifier.predict(waveform)
+
+        assert result["threat_type"] is None
+        assert result["confidence"] == 0.0
+        # Ensure trace threat scores are ignored / zeroed
+        assert result["category_scores"].get("CHAINSAW", 0.0) == 0.0
+    finally:
+        classifier._model = orig_model
+        classifier._is_loaded = orig_loaded
+
+

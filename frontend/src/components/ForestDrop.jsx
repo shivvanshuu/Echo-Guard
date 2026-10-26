@@ -25,9 +25,22 @@ const THREAT_COLOR = {
 
 const STATUS_TEXT = {
   detected: 'Threat detected',
-  heard_no_threat: 'Heard, no threat',
+  heard_no_threat: 'Heard clearly, no threat detected',
   too_faint: 'Too faint to hear',
 };
+
+function getNodeStatus(node) {
+  if (!node) return 'too_faint';
+  if (node.status === 'detected') {
+    return 'detected';
+  }
+  // UI fallback logic: If calculated SNR is strictly positive (> 0 dB) but classification is unclassified (0%),
+  // do NOT set alert status to "Too faint to hear". Correctly label as "Heard clearly, no threat detected".
+  if (node.snr_db > 0 && (node.status === 'too_faint' || node.status === 'heard_no_threat' || !node.confidence || node.confidence === 0)) {
+    return 'heard_no_threat';
+  }
+  return node.status || 'too_faint';
+}
 
 // ---- Forest scenery: fixed so it does not change between renders ---------------------------
 function mulberry32(seed) {
@@ -202,7 +215,7 @@ function Verdict({ result }) {
       </>
     );
   }
-  if (source.threat_type === 'UNKNOWN') {
+  if (!source || !source.threat_type || source.threat_type === 'UNKNOWN' || source.threat_type === 'NONE') {
     return (
       <>
         <h3>No threat in this clip</h3>
@@ -239,6 +252,7 @@ function NodeTable({ result }) {
         <tbody>
           {result.nodes.map((n) => {
             const isStrongest = n.id === result.strongest_node;
+            const effectiveStatus = getNodeStatus(n);
             return (
               <tr key={n.id} data-strongest={isStrongest}>
                 <td>
@@ -249,14 +263,14 @@ function NodeTable({ result }) {
                 <td>{formatDistance(n.distance_m)}</td>
                 <td>{formatDb(n.snr_db)}</td>
                 <td>
-                  {n.status === 'detected' ? (
+                  {effectiveStatus === 'detected' && n.threat_type ? (
                     <span className={`threat-tag ${n.threat_type}`}>{threatLabel(n.threat_type)}</span>
                   ) : (
-                    <span className="fd-muted">{STATUS_TEXT[n.status]}</span>
+                    <span className="fd-muted">{STATUS_TEXT[effectiveStatus] || STATUS_TEXT.heard_no_threat}</span>
                   )}
                 </td>
                 <td>
-                  {n.status === 'too_faint' ? (
+                  {effectiveStatus === 'too_faint' ? (
                     <span className="fd-muted">n/a</span>
                   ) : (
                     <div className="confidence-bar-container">
@@ -264,12 +278,12 @@ function NodeTable({ result }) {
                         <div
                           className="confidence-fill"
                           style={{
-                            width: percent(n.confidence),
+                            width: percent(n.confidence || 0),
                             backgroundColor: n.heard ? 'var(--threat-chainsaw)' : 'var(--text-dim)',
                           }}
                         />
                       </div>
-                      <span className="confidence-label" style={{ minWidth: '2.6rem' }}>{percent(n.confidence)}</span>
+                      <span className="confidence-label" style={{ minWidth: '2.6rem' }}>{percent(n.confidence || 0)}</span>
                     </div>
                   )}
                 </td>
@@ -522,7 +536,8 @@ export default function ForestDrop({ active }) {
               {point &&
                 nodes.map((n) => {
                   const r = resultById[n.id];
-                  if (!r || r.status === 'too_faint') return null;
+                  const effectiveStatus = getNodeStatus(r);
+                  if (!r || effectiveStatus === 'too_faint') return null;
                   const p = toPx(n.lat, n.lon);
                   return (
                     <line
@@ -531,8 +546,8 @@ export default function ForestDrop({ active }) {
                       y1={point.y}
                       x2={p.x}
                       y2={p.y}
-                      strokeWidth={r.status === 'detected' ? 2 : 1.5}
-                      strokeDasharray={r.status === 'detected' ? undefined : '4 5'}
+                      strokeWidth={effectiveStatus === 'detected' ? 2 : 1.5}
+                      strokeDasharray={effectiveStatus === 'detected' ? undefined : '4 5'}
                       style={{ stroke: nodeColor(n), opacity: 0.8 }}
                     />
                   );
@@ -542,6 +557,7 @@ export default function ForestDrop({ active }) {
                 const p = toPx(n.lat, n.lon);
                 const r = resultById[n.id];
                 const isStrongest = result && result.strongest_node === n.id;
+                const effectiveStatus = getNodeStatus(r);
                 return (
                   <g key={n.id}>
                     {isStrongest && (
@@ -558,7 +574,7 @@ export default function ForestDrop({ active }) {
                     >
                       {shortName(n.id)}
                     </text>
-                    {r && r.status !== 'too_faint' && (
+                    {r && effectiveStatus !== 'too_faint' && (
                       <text
                         x={p.x}
                         y={p.y + 43}
@@ -566,7 +582,7 @@ export default function ForestDrop({ active }) {
                         fontSize="12"
                         style={{ fill: 'var(--text-secondary)', paintOrder: 'stroke', stroke: '#eef3ea', strokeWidth: 4 }}
                       >
-                        {percent(r.confidence)}
+                        {percent(r.confidence || 0)}
                       </text>
                     )}
                   </g>
