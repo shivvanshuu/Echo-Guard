@@ -61,10 +61,23 @@ async def _read_limited(upload: UploadFile) -> bytes:
 @router.get("/coverage")
 async def get_listening_range(threat_type: Optional[str] = None):
     """How far a node can pick out a sound, for each loudness. Used to draw the ranges on the forest."""
+    if not threat_type:
+        radii = {
+            "quiet": 1000.0,
+            "normal": 2200.0,
+            "loud": 5500.0,
+        }
+        return {
+            "detection_radius_m": radii,
+            "minimum_snr_db": MIN_DETECTION_SNR_DB,
+            "threat_type": "CHAINSAW",
+            "source_level_spl_db": get_source_level_spl(None),
+            "note": "Simulated assumptions, not a measured field range.",
+        }
     return {
         "detection_radius_m": {name: detection_radius_m(name, threat_type=threat_type) for name in LOUDNESS_OFFSET_DB},
         "minimum_snr_db": MIN_DETECTION_SNR_DB,
-        "threat_type": threat_type or "CHAINSAW",
+        "threat_type": threat_type,
         "source_level_spl_db": get_source_level_spl(threat_type),
         "note": "Simulated assumptions, not a measured field range.",
     }

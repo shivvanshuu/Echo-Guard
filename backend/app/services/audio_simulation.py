@@ -49,8 +49,8 @@ LOUDNESS_OFFSET_DB = {"quiet": -10.0, "normal": 0.0, "loud": 10.0}
 
 # Hardcoded real-world baseline source levels (Source Level SPL in dB at 1 meter reference distance)
 SOURCE_LEVEL_SPL_DB: Dict[str, float] = {
-    "GUNSHOT": 150.0,         # Impulsive high-caliber ballistic impulse (~150 dB SPL @ 1m)
-    "BLAST_FISHING": 145.0,    # Explosive detonation shockwave (~145 dB SPL @ 1m)
+    "GUNSHOT": 148.0,         # Impulsive high-caliber ballistic impulse (~148 dB SPL @ 1m, propagation up to ~5.5 km)
+    "BLAST_FISHING": 145.0,    # Explosive detonation shockwave (~145 dB SPL @ 1m, propagation up to ~5.1 km)
     "CHAINSAW": 110.0,        # Two-stroke gas logging chainsaw at full throttle (~110 dB SPL @ 1m)
     "ILLEGAL_VESSEL": 105.0,   # High-speed marine outboard vessel engine (~105 dB SPL @ 1m)
     "VEHICLE_ENGINE": 100.0,   # Heavy diesel logging vehicle / road transport truck (~100 dB SPL @ 1m)
@@ -208,6 +208,18 @@ def is_impulsive_threat(threat_type: Optional[str]) -> bool:
     return threat_type.strip().upper() in IMPULSIVE_THREATS
 
 
+def is_waveform_impulsive(waveform: np.ndarray) -> bool:
+    """Return True if waveform has impulsive acoustic characteristics (high crest factor, sharp transient)."""
+    if waveform.size == 0:
+        return False
+    peak_val = float(np.max(np.abs(waveform)))
+    rms_val = rms(waveform)
+    if rms_val < 1e-6:
+        return False
+    crest_factor = peak_val / rms_val
+    return crest_factor > 3.8 and peak_val > 0.1
+
+
 def get_source_level_spl(threat_type: Optional[str] = None) -> float:
     """Return hardcoded real-world baseline source level (Source Level SPL in dB at 1 meter)."""
     if not threat_type:
@@ -225,14 +237,14 @@ def calculate_source_intensity(waveform: np.ndarray, threat_type: Optional[str] 
     Calculate the source audio intensity (initial loudness).
 
     Peak vs. RMS Power:
-    If the detected threat is an impulsive class (like gunshot), calculate its initial loudness
-    using peak amplitude (max energy) rather than the average RMS power of the entire clip,
-    preventing impulsive energy from being diluted across long silence windows.
+    If the detected threat is an impulsive class (like gunshot) or an unclassified impulsive waveform,
+    calculate its initial loudness using peak amplitude (max energy) rather than the average RMS power
+    of the entire clip, preventing impulsive energy from being diluted across long silence windows.
     For continuous threats (chainsaws, vehicles), average RMS power is used.
     """
     if waveform.size == 0:
         return 0.0
-    if is_impulsive_threat(threat_type):
+    if is_impulsive_threat(threat_type) or (threat_type is None and is_waveform_impulsive(waveform)):
         peak_val = float(np.max(np.abs(waveform)))
         return max(peak_val, 1e-6)
     return rms(waveform)
@@ -428,19 +440,24 @@ def simulate_audio_drop(
     }
 
     detected_threat = source_verdict["threat_type"]
+    waveform_is_impulsive = is_waveform_impulsive(waveform)
+    is_impulsive = is_impulsive_threat(detected_threat) or waveform_is_impulsive
     source_intensity = calculate_source_intensity(waveform, detected_threat)
     source_spl = get_source_level_spl(detected_threat)
+    if (not detected_threat or detected_threat in ("UNKNOWN", "NONE")) and waveform_is_impulsive:
+        source_spl = SOURCE_LEVEL_SPL_DB["GUNSHOT"]
+    effective_threat = detected_threat if detected_threat not in ("UNKNOWN", "NONE", None) else ("GUNSHOT" if waveform_is_impulsive else None)
     source_verdict.update({
         "source_level_spl_db": source_spl,
         "initial_intensity": round(source_intensity, 4),
-        "is_impulsive": is_impulsive_threat(detected_threat),
+        "is_impulsive": is_impulsive,
     })
 
     node_results: List[Dict[str, Any]] = []
     alert_payloads: List[Dict[str, Any]] = []
     for node in nodes:
         distance = haversine_distance_meters(source_lat, source_lon, node["lat"], node["lon"])
-        snr = received_snr_db(distance, loudness, threat_type=detected_threat)
+        snr = received_snr_db(distance, loudness, threat_type=effective_threat)
         entry: Dict[str, Any] = {
             "id": node["id"],
             "name": node.get("name"),
@@ -504,7 +521,7 @@ def simulate_audio_drop(
             "reference_snr_db": source_spl + LOUDNESS_OFFSET_DB[loudness] - AMBIENT_NOISE_FLOOR_SPL_DB,
             "forest_absorption_db_per_km": FOREST_ABSORPTION_DB_PER_KM,
             "minimum_snr_db_to_detect": MIN_DETECTION_SNR_DB,
-            "is_impulsive": is_impulsive_threat(detected_threat),
+            "is_impulsive": is_impulsive,
             "note": "Classification is real. Distance, loudness and noise are simulated assumptions.",
         },
     }

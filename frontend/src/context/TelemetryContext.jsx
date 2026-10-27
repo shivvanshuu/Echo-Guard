@@ -4,25 +4,33 @@ import { fetchRecentAlerts, getWebSocketEndpoint, checkBackendHealth, postTeleme
 const TelemetryContext = createContext(null);
 
 export const DEFAULT_NODES = [
-  // --- Central & Northern Canopy Grid (>= 1.7 km apart) ---
-  { id: 'NODE-ALPHA', name: 'Alpha Reserve North', lat: -3.4530, lon: -62.2200, battery: 94, status: 'ONLINE', signal: 98 },
-  { id: 'NODE-JULIETT', name: 'Juliett Central Sanctuary', lat: -3.4700, lon: -62.2150, battery: 96, status: 'ONLINE', signal: 99 },
-  { id: 'NODE-NOVEMBER', name: 'November Northern Canopy', lat: -3.4250, lon: -62.2220, battery: 87, status: 'ONLINE', signal: 90 },
-  { id: 'NODE-HOTEL', name: 'Hotel Northeast Basin', lat: -3.4350, lon: -62.1980, battery: 85, status: 'ONLINE', signal: 91 },
-  { id: 'NODE-INDIA', name: 'India Northwest Ridge', lat: -3.4360, lon: -62.2460, battery: 88, status: 'ONLINE', signal: 89 },
-  { id: 'NODE-CHARLIE', name: 'Charlie Canopy Perimeter', lat: -3.4520, lon: -62.2400, battery: 91, status: 'ONLINE', signal: 95 },
-  { id: 'NODE-FOXTROT', name: 'Foxtrot Boundary Creek', lat: -3.4460, lon: -62.1800, battery: 65, status: 'ONLINE', signal: 78 },
-  { id: 'NODE-GOLF', name: 'Golf Eastern Ridge', lat: -3.4620, lon: -62.1700, battery: 90, status: 'ONLINE', signal: 94 },
-  { id: 'NODE-KILO', name: 'Kilo Western Wetland', lat: -3.4650, lon: -62.2620, battery: 79, status: 'ONLINE', signal: 84 },
-  { id: 'NODE-OSCAR', name: 'Oscar Southern Foothills', lat: -3.5100, lon: -62.2100, battery: 84, status: 'ONLINE', signal: 88 },
+  // --- Deep Forest & Interior ---
+  { id: 'NODE-NOVEMBER', name: 'November Northern Canopy', lat: -3.4102, lon: -62.2196, battery: 87, status: 'ONLINE', signal: 90 },
+  { id: 'NODE-INDIA', name: 'India Northwest Interior', lat: -3.4369, lon: -62.2357, battery: 88, status: 'ONLINE', signal: 89 },
+  { id: 'NODE-HOTEL', name: 'Hotel Northeast Basin', lat: -3.4217, lon: -62.1828, battery: 85, status: 'ONLINE', signal: 91 },
+  { id: 'NODE-CHARLIE', name: 'Charlie Mid-Left Sector', lat: -3.4470, lon: -62.2660, battery: 91, status: 'ONLINE', signal: 95 },
+  { id: 'NODE-ALPHA', name: 'Alpha Central Sanctuary', lat: -3.4461, lon: -62.2104, battery: 94, status: 'ONLINE', signal: 98 },
 
-  // --- Water & River Monitoring Chain (Lima -> Delta -> Echo -> Bravo -> Papa -> Mike) ---
-  { id: 'NODE-DELTA', name: 'Delta Marine Sanctuary', lat: -3.4780, lon: -62.2530, battery: 76, status: 'ONLINE', signal: 86 },
-  { id: 'NODE-LIMA', name: 'Lima Southwest Mangrove', lat: -3.4920, lon: -62.2420, battery: 82, status: 'ONLINE', signal: 87 },
-  { id: 'NODE-ECHO', name: 'Echo River Corridor', lat: -3.4930, lon: -62.2180, battery: 83, status: 'ONLINE', signal: 89 },
-  { id: 'NODE-BRAVO', name: 'Bravo River Outpost', lat: -3.4860, lon: -62.1960, battery: 88, status: 'ONLINE', signal: 92 },
-  { id: 'NODE-PAPA', name: 'Papa River East Crossing', lat: -3.4790, lon: -62.1720, battery: 89, status: 'ONLINE', signal: 92 },
-  { id: 'NODE-MIKE', name: 'Mike Southeast River Bend', lat: -3.5040, lon: -62.1820, battery: 91, status: 'ONLINE', signal: 93 },
+  // --- Chokepoint & Perimeter Guards ---
+  // BRAVO: Slid down the dirt trail towards KILO to eliminate dead zone and form an unbroken listening chain
+  { id: 'NODE-BRAVO', name: 'Bravo Trailhead Early Warning', lat: -3.4194, lon: -62.2624, battery: 88, status: 'ONLINE', signal: 92 },
+  // LIMA: Guarding south bank of river on far west side to detect vessel engines
+  { id: 'NODE-LIMA', name: 'Lima West River Guard', lat: -3.4709, lon: -62.2702, battery: 82, status: 'ONLINE', signal: 87 },
+  // PAPA: Far Northeast Outpost spread into the upper-right deep forest
+  { id: 'NODE-PAPA', name: 'Papa Far Northeast Outpost', lat: -3.4056, lon: -62.1529, battery: 89, status: 'ONLINE', signal: 92 },
+  // FOXTROT: Moved further down and to the right on South bank so dashed listening circles just touch MIKE
+  { id: 'NODE-FOXTROT', name: 'Foxtrot East River Guard', lat: -3.4723, lon: -62.1828, battery: 65, status: 'ONLINE', signal: 78 },
+
+  // --- Logging Trail (Tree-Mounted Chain) ---
+  { id: 'NODE-KILO', name: 'Kilo Trail Upper Right Bank', lat: -3.4323, lon: -62.2550, battery: 79, status: 'ONLINE', signal: 84 },
+  { id: 'NODE-DELTA', name: 'Delta Trail Mid Left Bank', lat: -3.4484, lon: -62.2449, battery: 76, status: 'ONLINE', signal: 86 },
+  { id: 'NODE-JULIETT', name: 'Juliett Trail Lower Right Bank', lat: -3.4498, lon: -62.2288, battery: 96, status: 'ONLINE', signal: 99 },
+  { id: 'NODE-GOLF', name: 'Golf Trail Center Left Bank', lat: -3.4663, lon: -62.2196, battery: 90, status: 'ONLINE', signal: 94 },
+
+  // --- Riverbank Guards (Cleanly separated across water) ---
+  { id: 'NODE-ECHO', name: 'Echo River South Bank West', lat: -3.4718, lon: -62.2426, battery: 83, status: 'ONLINE', signal: 89 },
+  { id: 'NODE-OSCAR', name: 'Oscar River North Bank Trailhead', lat: -3.4571, lon: -62.2136, battery: 84, status: 'ONLINE', signal: 88 },
+  { id: 'NODE-MIKE', name: 'Mike Downstream North Bank', lat: -3.4553, lon: -62.1888, battery: 91, status: 'ONLINE', signal: 93 },
 ];
 
 export function TelemetryProvider({ children }) {

@@ -15,6 +15,13 @@ const LOUDNESS = [
   { id: 'loud', label: 'Loud' },
 ];
 
+const BASE_DETECTION_RADIUS_M = 2200;
+const DEFAULT_DETECTION_RADII_M = {
+  quiet: 1000,
+  normal: 2200,
+  loud: 5500,
+};
+
 const THREAT_COLOR = {
   CHAINSAW: 'var(--threat-chainsaw)',
   GUNSHOT: 'var(--threat-gunshot)',
@@ -84,9 +91,11 @@ function useProjection(nodes) {
     const scale = Math.min(W / (maxX - minX), H / (maxY - minY));
     const offX = (W - (maxX - minX) * scale) / 2;
     const offY = (H - (maxY - minY) * scale) / 2;
+    const pixelsPerKm = scale * 1000;
 
     return {
       scale,
+      pixelsPerKm,
       toPx: (lat, lon) => ({
         x: offX + ((lon - lon0) * metresPerLon - minX) * scale,
         y: offY + ((lat0 - lat) * metresPerLat - minY) * scale,
@@ -335,7 +344,7 @@ function PeakClasses({ clip, modelIsReal }) {
 // ---- Main view -----------------------------------------------------------------------------
 export default function ForestDrop({ active }) {
   const { nodes } = useTelemetry();
-  const { scale, toPx, toGeo } = useProjection(nodes);
+  const { scale, pixelsPerKm, toPx, toGeo } = useProjection(nodes);
 
   const svgRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -466,7 +475,10 @@ export default function ForestDrop({ active }) {
     return map;
   }, [result]);
 
-  const radiusM = range && range.detection_radius_m ? range.detection_radius_m[loudness] : null;
+  const radiusM =
+    (range && range.detection_radius_m && range.detection_radius_m[loudness]) ||
+    DEFAULT_DETECTION_RADII_M[loudness] ||
+    BASE_DETECTION_RADIUS_M;
   const running = phase === 'running';
   const canRun = Boolean(file && point) && !running;
   const isVideo = file && file.type.startsWith('video/');
@@ -493,6 +505,52 @@ export default function ForestDrop({ active }) {
           </div>
 
           <div className="fd-canvas-wrap" data-dragging={dragging}>
+            {/* Visual Terrain Overlays (SVG): absolute-positioned behind sensor nodes, above forest background */}
+            <svg
+              className="fd-terrain-overlay"
+              viewBox={`0 0 ${W} ${H}`}
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none',
+                zIndex: 1,
+              }}
+            >
+              {/* Distinct, winding River flowing across the bottom third */}
+              <path
+                d="M -20 445 C 160 435, 260 430, 370 435 C 440 438, 500 440, 560 438 C 650 432, 740 435, 840 440 S 960 445, 1030 445"
+                fill="none"
+                stroke="#bae6fd"
+                strokeWidth="40"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity="0.6"
+              />
+              <path
+                d="M -20 445 C 160 435, 260 430, 370 435 C 440 438, 500 440, 560 438 C 650 432, 740 435, 840 440 S 960 445, 1030 445"
+                fill="none"
+                stroke="#7dd3fc"
+                strokeWidth="16"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity="0.3"
+              />
+              {/* Dirt Trail / Road entering from top-left into center of forest (dead-end logging camp landing at north bank) */}
+              <path
+                d="M -20 60 C 80 120, 170 170, 240 215 C 310 260, 360 295, 410 325 C 445 350, 470 375, 495 398"
+                fill="none"
+                stroke="#78350f"
+                strokeWidth="8"
+                strokeDasharray="10, 10"
+                strokeLinecap="round"
+                opacity="0.7"
+              />
+            </svg>
+
             <svg
               ref={svgRef}
               className="fd-svg"
@@ -503,35 +561,62 @@ export default function ForestDrop({ active }) {
               onDragOver={handleDragOver}
               onDragLeave={() => { setDragging(false); setHover(null); }}
               onDrop={handleDrop}
+              style={{ position: 'relative', zIndex: 2 }}
             >
               <rect width={W} height={H} fill="#eef3ea" />
-              <path
-                d="M -20 430 C 220 390, 340 530, 560 480 S 880 340, 1020 390"
-                fill="none"
-                stroke="#d3e0e6"
-                strokeWidth="26"
-                strokeLinecap="round"
-              />
               {CANOPY.map((t, i) => (
                 <circle key={i} cx={t.x} cy={t.y} r={t.r} fill={CANOPY_FILL[t.tone]} />
               ))}
 
-              {radiusM &&
-                nodes.map((n) => {
-                  const p = toPx(n.lat, n.lon);
-                  return (
-                    <circle
-                      key={`range-${n.id}`}
-                      cx={p.x}
-                      cy={p.y}
-                      r={radiusM * scale}
-                      fill="none"
-                      style={{ stroke: 'var(--accent-cyan)', opacity: 0.4 }}
-                      strokeWidth="1.5"
-                      strokeDasharray="5 6"
-                    />
-                  );
-                })}
+              {/* Visual Terrain Overlays: River and Logging Trail directly above canopy */}
+              <g pointerEvents="none" className="fd-terrain-layer">
+                {/* Winding River across the bottom third */}
+                <path
+                  d="M -20 445 C 160 435, 260 430, 370 435 C 440 438, 500 440, 560 438 C 650 432, 740 435, 840 440 S 960 445, 1030 445"
+                  fill="none"
+                  stroke="#bae6fd"
+                  strokeWidth="40"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity="0.6"
+                />
+                <path
+                  d="M -20 445 C 160 435, 260 430, 370 435 C 440 438, 500 440, 560 438 C 650 432, 740 435, 840 440 S 960 445, 1030 445"
+                  fill="none"
+                  stroke="#7dd3fc"
+                  strokeWidth="16"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity="0.3"
+                />
+                {/* Dirt Trail / Road entering from top-left terminating at north bank logging landing */}
+                <path
+                  d="M -20 60 C 80 120, 170 170, 240 215 C 310 260, 360 295, 410 325 C 445 350, 470 375, 495 398"
+                  fill="none"
+                  stroke="#78350f"
+                  strokeWidth="8"
+                  strokeDasharray="10, 10"
+                  strokeLinecap="round"
+                  opacity="0.7"
+                />
+              </g>
+
+              {/* Visual Helpers: Dashed listening circles around nodes (e.g. 2.2 km base detection range) */}
+              {nodes.map((n) => {
+                const p = toPx(n.lat, n.lon);
+                return (
+                  <circle
+                    key={`range-${n.id}`}
+                    cx={p.x}
+                    cy={p.y}
+                    r={radiusM * scale}
+                    fill="none"
+                    style={{ stroke: 'var(--accent-cyan)', opacity: 0.4 }}
+                    strokeWidth="1.5"
+                    strokeDasharray="5 6"
+                  />
+                );
+              })}
 
               {point &&
                 nodes.map((n) => {
@@ -559,7 +644,7 @@ export default function ForestDrop({ active }) {
                 const isStrongest = result && result.strongest_node === n.id;
                 const effectiveStatus = getNodeStatus(r);
                 return (
-                  <g key={n.id}>
+                  <g key={n.id} className="fd-node-group" style={{ cursor: 'pointer', pointerEvents: 'auto' }}>
                     {isStrongest && (
                       <circle cx={p.x} cy={p.y} r="16" fill="none" strokeWidth="2.5" style={{ stroke: nodeColor(n) }} />
                     )}
@@ -616,9 +701,7 @@ export default function ForestDrop({ active }) {
           </div>
 
           <div className="fd-caption">
-            {radiusM
-              ? `Dashed circles show how far a sensor can pick out a ${loudness} sound (about ${formatDistance(radiusM)}). `
-              : ''}
+            {`Dashed circles show how far a sensor can pick out a ${loudness} sound (about ${formatDistance(radiusM)}). `}
             Distances use each sensor’s real position. How far sound carries is a simulated assumption, not a field
             measurement.
           </div>

@@ -50,22 +50,22 @@ void SimulationEngine::setupDefaultSwarm() {
     };
 
     std::vector<NodeDef> defaults = {
-        {"NODE-ALPHA",    -3.4530, -62.2200, 1.8},
-        {"NODE-JULIETT",  -3.4700, -62.2150, 1.8},
-        {"NODE-NOVEMBER", -3.4250, -62.2220, 1.8},
-        {"NODE-HOTEL",    -3.4350, -62.1980, 1.8},
-        {"NODE-INDIA",    -3.4360, -62.2460, 1.8},
-        {"NODE-CHARLIE",  -3.4520, -62.2400, 1.8},
-        {"NODE-FOXTROT",  -3.4460, -62.1800, 1.8},
-        {"NODE-GOLF",     -3.4620, -62.1700, 1.8},
-        {"NODE-KILO",     -3.4650, -62.2620, 1.8},
-        {"NODE-OSCAR",    -3.5100, -62.2100, 1.8},
-        {"NODE-DELTA",    -3.4780, -62.2530, 2.0},
-        {"NODE-LIMA",     -3.4920, -62.2420, 2.0},
-        {"NODE-ECHO",     -3.4930, -62.2180, 2.0},
-        {"NODE-BRAVO",    -3.4860, -62.1960, 2.0},
-        {"NODE-PAPA",     -3.4790, -62.1720, 2.0},
-        {"NODE-MIKE",     -3.5040, -62.1820, 2.0}
+        {"NODE-ALPHA",    -3.4461, -62.2104, 1.8},
+        {"NODE-JULIETT",  -3.4498, -62.2288, 1.8},
+        {"NODE-NOVEMBER", -3.4102, -62.2196, 1.8},
+        {"NODE-HOTEL",    -3.4217, -62.1828, 1.8},
+        {"NODE-INDIA",    -3.4369, -62.2357, 1.8},
+        {"NODE-CHARLIE",  -3.4470, -62.2660, 1.8},
+        {"NODE-FOXTROT",  -3.4723, -62.1828, 2.0},
+        {"NODE-GOLF",     -3.4663, -62.2196, 1.8},
+        {"NODE-KILO",     -3.4323, -62.2550, 1.8},
+        {"NODE-OSCAR",    -3.4571, -62.2136, 2.0},
+        {"NODE-DELTA",    -3.4484, -62.2449, 1.8},
+        {"NODE-LIMA",     -3.4709, -62.2702, 2.0},
+        {"NODE-ECHO",     -3.4718, -62.2426, 2.0},
+        {"NODE-BRAVO",    -3.4194, -62.2624, 2.0},
+        {"NODE-PAPA",     -3.4056, -62.1529, 2.0},
+        {"NODE-MIKE",     -3.4553, -62.1888, 2.0}
     };
 
     int countToCreate = std::min(m_config.nodeCount, static_cast<int>(defaults.size()));
